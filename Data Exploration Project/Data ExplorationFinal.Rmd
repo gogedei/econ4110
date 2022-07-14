@@ -1,0 +1,151 @@
+---
+title: "Data Exploration"
+author: "Ogedei Gantumur"
+date: '2022-07-14'
+output: html_document
+---
+
+```{r, include=FALSE}
+
+library(tidyverse)
+library(dplyr)
+library(fixest)
+library(purrr)
+library(lubridate)
+
+```
+
+#Data Cleaning Code
+
+```{r}
+
+##Data
+
+##Reading in files.
+
+gt <- list.files(pattern = 'trends_up_to', full.names = TRUE) %>%
+  map_df(read_csv) %>%
+  bind_rows()
+
+idname <- read_csv('id_name_link.csv')
+
+sc <- read_csv('Most+Recent+Cohorts+(Scorecard+Elements).csv')
+
+```
+
+```{r}
+
+## Date Manipulation in order to make utilizing the dates easier.
+
+gt <- gt %>%
+  mutate(month = str_sub(gt$monthorweek, start = 1, end = 10) %>%
+           ymd() %>%
+           floor_date(unit = 'month'))
+
+## Indexing names and keywords.
+
+gt <- gt %>%
+  group_by(schname, keyword) %>%
+  mutate(std_index = (index - mean (index)) / sd(index))
+
+## Removal of Duplicates
+
+idname <- idname %>%
+  group_by(schname) %>%
+  mutate(n = n()) %>%
+  filter(n == 1)
+
+```
+
+```{r}
+## Joining Data by utilizing an inner join. This utilizes a common id key to merge two data sets.
+## Though some mismatches may occur leading to potential null values.
+
+joined <- gt %>%
+  inner_join(idname, by = 'schname')
+
+joined <- joined %>%
+  inner_join(sc, by = c('unitid' = 'UNITID'), c('opeid' = 'OPEID'))
+
+```
+
+```{r}
+
+## Cleaning Misalignment.
+
+clean <- joined %>%
+  group_by(schname, month, `md_earn_wne_p10-REPORTED-EARNINGS`, PREDDEG) %>%
+  summarize(Student_Interest = mean(std_index))
+
+##Conversion of md_earn_wne_p10-REPORTED-EARNINGS from chr to numeric values. This allows us to conduct calculations directly with listed values.
+
+clean$`md_earn_wne_p10-REPORTED-EARNINGS` <-as.numeric(as.character(clean$`md_earn_wne_p10-REPORTED-EARNINGS`))
+
+```
+
+##In order to measure student interest the varaible Student_Interest was created by calculating the average change of school popularity search terms in accordance to each independent school on a monthly basis.
+
+
+```{r}
+
+## Removal of Null Values created by mismatches
+
+clean <- clean %>%
+  na.omit()
+
+##Null values were removed in order to prevent any null values for being reported or interfering with calculations.
+
+```
+
+```{r}
+
+clean <- clean %>%
+  mutate(Predominatly_Bachelors_Degrees = PREDDEG == 3)
+
+## To establish what income could be classified as high based on the median. The line was drawn at the median given that it represents an income that either 50% were below or above. This allows us to witness whether an instance occurred below the median or above to be considered higher income.
+## Limitation of the colleges to that are predominately offering bachelor degrees allow us focus on the most popular degree offering and utilize the greatest availability of information from the college scorecard. 
+
+median(clean$`md_earn_wne_p10-REPORTED-EARNINGS`)
+
+## Creation of the Higher than median income variable.
+
+clean <- clean %>%
+  mutate(High_Income = `md_earn_wne_p10-REPORTED-EARNINGS` > 35600)
+
+## Establishes period of time post scorecard introduction. This allows us to create two binary variables based on whether an instance occurred post of pre the introduction of the college score card.
+
+clean <- clean %>%
+  mutate(Post_Scorecard_Introduction = month > '2015-09-01')
+
+```
+
+#Analysis of Cleaned Data
+
+```{r}
+
+## Verification of effective separation into two binary groups.
+
+g1 <- ggplot(clean, aes(Post_Scorecard_Introduction, Student_Interest)) +
+  geom_point()
+g1
+
+## Regression analysis utilizing an interaction term. Utilization of an interaction term and binary variables allows us to effectively measure change dependent on multiple conditions without excluding the variation or correlation that occurs when all terms are considered. 
+
+m1 <- feols(Student_Interest ~ Post_Scorecard_Introduction + High_Income + Post_Scorecard_Introduction*High_Income + Predominatly_Bachelors_Degrees, data = clean)
+etable(m1)
+
+# Adjusting for Heteroskedasticity
+
+etable(m1,vcov = 'hetero')
+
+```
+#Analysis of Regression Results
+
+A statistically significant interaction term is witness between post scorecard introduction(TRUE) and Higher Income(TRUE) at a 0.1% significance level. The coefficient is seen to be approximately 0.0976. This gives us insight into the impacts and variation of results based on given conditions. Whether Income is considered Higher(True) or lower(False) against that of Whether the college scorecard had been introduced yet (True) or not (False).
+
+Upon reviewing the adjusted model results we find that the Interaction term was in fact statistically significant at a significance level of 0.1% indicating significant difference between pre and post college score card student interest in higher income schools. The coefficient for post college score card high income schools was 0.0976 which is in fact greater than the coefficient for post college score card lower income schools of -0.4097 units. It was seen that student interests actually decreased over time for lower income colleges after the college score card was introduced. 
+
+The regression results have presented us statistically significant association of higher income producing schools generating greater student interests per aggregated Google trends results in a post college scorecard world. The regression also depicted a decreasing student interests in schools that yielded a lower than median income among all predominately bachelor degree schools.
+
+These results have depicted a clear shift in student interests to higher income yielding colleges that predominately offer bachelor degrees in a post college scorecard world. The release of access to previously confidential college financial results has likely aided in leveling the playing field of information between that of perspective students and educational institutions. Given the rising costs of attaining such educational degrees and the associated student debt crisis many perspective students would be weary to attend a educational institution that has on average yielded lower incomes.
+
